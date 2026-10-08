@@ -1,0 +1,13 @@
+{
+  "name": "publicwww-api",
+  "version": "1.0.0",
+  "description": "A small client for the PublicWWW API: search the source code of hundreds of millions of websites.",
+  "type": "module",
+  "main": "publicwww.mjs",
+  "bin": { "publicwww": "publicwww.mjs" },
+  "engines": { "node": ">=18" },
+  "homepage": "https://publicwww.com/docs/api/",
+  "repository": { "type": "git", "url": "https://github.com/publicwww-com/publicwww-api-javascript.git" },
+  "license": "MIT",
+  "private": true
+}
