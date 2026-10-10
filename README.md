@@ -42,6 +42,44 @@ The query is the usual [PublicWWW syntax](https://publicwww.com/docs/query-synta
 `"exact phrase"`, several words for all of them, `-word` to exclude, `site:de`,
 `depth:all` for inner pages.
 
+## Clusters
+
+A cluster is a saved list of sites - the results of a search or your own list - to
+pull values out of their page source or to combine with other clusters. See
+[clusters in the API](https://publicwww.com/docs/api/clusters/).
+
+```sh
+node publicwww.mjs cluster-create --query '"googletagmanager.com/gtm.js"'   # prints id, size, created, name
+node publicwww.mjs extract 12 --presets email,phone > contacts.csv          # the whole cluster, part after part
+node publicwww.mjs extract 12 --regex '/data-site-id="([0-9]+)"/i' > ids.csv
+node publicwww.mjs cluster-combine diff 14 12 --name "new this month"       # also: and, or
+node publicwww.mjs clusters      # and: cluster ID, presets, cluster-rename ID NAME, cluster-delete ID
+```
+
+```js
+const gtm = await pw.createCluster ({ query: '"googletagmanager.com/gtm.js"' });   // costs one search
+const mine = await pw.createCluster ({ domains: ["example.com", "https://example.org/"], name: "mine" });
+
+// Every site, in parts of up to 1000 (following next_offset); spends extraction points.
+for await (const row of pw.iterExtract (gtm.id, { presets: ["email", "phone"] })) {
+  const [emails, phones] = row.values;               // one array per expression
+  console.log (row.domain, emails, phones);
+}
+
+const hotjar = await pw.createCluster ({ query: '"static.hotjar.com"' });
+const both = await pw.combineClusters ("and", [gtm.id, hotjar.id]);   // "or"; "diff" - the first without the second
+for await (const domain of pw.iterCluster (both.id)) console.log (domain);
+await pw.deleteCluster (hotjar.id);
+```
+
+`clusterPresets ()` lists the ready-made expressions: email, phone, whatsapp,
+telegram, skype, facebook, instagram, twitter, linkedin, gtm, ga4, ua, hotjar,
+adsense, bitcoin. Your own `regex` is a PCRE in slashes; the first group is the
+value. `extract ()` is one part, `next_offset` says where the next one starts. An
+account keeps up to 100 clusters (`409 cluster_limit` past that). If the day's
+extraction points run out midway, `iterExtract` throws `extract_quota_exceeded`
+with the offset to resume from (`extract ... --offset N`).
+
 ## Errors
 
 Any refusal throws `PublicWWWError` with `.status` and `.code`, except one: `429 too_many_requests` (more than ten
