@@ -14,13 +14,15 @@
 //   node publicwww.mjs search '"angular.min.js"' 20
 //   node publicwww.mjs export '"angular.min.js"' > sites.txt
 //   node publicwww.mjs cluster-create --query '"googletagmanager.com/gtm.js"'
+//   node publicwww.mjs cluster-create --query 'like:"online course" site:de' --limit 100
 //   node publicwww.mjs extract 12 --presets email,phone > contacts.csv
+//   node publicwww.mjs signatures 12
 
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const API = process.env.PUBLICWWW_API || "https://api.publicwww.com";
-const USER_AGENT = "publicwww-api-javascript/1.1";
+const USER_AGENT = "publicwww-api-javascript/1.2";
 
 export class PublicWWWError extends Error {
   constructor (status, code, message) {
@@ -132,10 +134,13 @@ export class Client {
 
   // A new cluster from a search ({ query }, costs one search like search())
   // or from a list of domains or urls ({ domains }; only sites in the index
-  // are kept). 409 cluster_limit when the account has 100.
-  async createCluster ({ query, domains, name } = {}) {
+  // are kept). limit takes only the first N results of the search, in its own
+  // order: pass it with like:, or the cluster takes the plan's maximum. 409
+  // cluster_limit when the account has 100.
+  async createCluster ({ query, domains, name, limit } = {}) {
     const body = query !== undefined ? { query } : { domains: [...(domains || [])] };
     if (name) body.name = name;
+    if (limit && query !== undefined) body.limit = limit;
     return this.#json ("/v1/clusters", {}, body);
   }
 
@@ -162,6 +167,19 @@ export class Client {
                        { presets, regex, offset, limit, skip_empty: skipEmpty });
   }
 
+  // One part of an extraction as CSV: { csv, next_offset, points_left },
+  // next_offset null when the cluster is done. The delimiter is a comma by
+  // default; header: true adds a first line with the column names. Costs
+  // extraction points.
+  async extractCsv (id, { presets = [], regex = [], offset = 0, limit = 1000, skipEmpty = true, delimiter, header = false } = {}) {
+    const body = { presets, regex, offset, limit, skip_empty: skipEmpty, format: "csv", header };
+    if (delimiter) body.delimiter = delimiter;
+    const res = await this.#get (`/v1/clusters/${Number (id)}/extract`, {}, body);
+    const next = res.headers.get ("X-Next-Offset");
+    return { csv: await res.text (), next_offset: next ? Number (next) : null,
+             points_left: Number (res.headers.get ("X-Points-Left") || 0) };
+  }
+
   // Every row of an extraction over the whole cluster from offset on, part
   // after part (following next_offset). Pass an object as meta to receive the
   // last part's numbers (regex, points_left, ...). If the day's extraction
@@ -179,6 +197,13 @@ export class Client {
     }
   }
 
+  // Code the cluster's websites share, as ready searches for more like them:
+  // { signatures: [{ query, in_cluster, websites, websites_max, technology }],
+  // domains_used, websites_with_code }. Spends nothing.
+  async signatures (id) {
+    return this.#json (`/v1/clusters/${Number (id)}/signatures`);
+  }
+
   async renameCluster (id, name) {
     return this.#json (`/v1/clusters/${Number (id)}/rename`, {}, { name });
   }
@@ -192,9 +217,10 @@ export class Client {
 // ---- command line ------------------------------------------------------------
 
 const USAGE = `usage: publicwww.mjs account | search QUERY [PER_PAGE] | export QUERY
-       | clusters | cluster ID | cluster-create (--query Q | --domains-file F) [--name N]
+       | clusters | cluster ID | cluster-create (--query Q [--limit N] | --domains-file F) [--name N]
        | cluster-combine and|or|diff ID ID... [--name N] | presets
-       | extract ID [--presets a,b] [--regex R]... [--offset N] | cluster-rename ID NAME | cluster-delete ID`;
+       | extract ID [--presets a,b] [--regex R]... [--offset N] [--delimiter C] | signatures ID
+       | cluster-rename ID NAME | cluster-delete ID`;
 
 // Positional arguments and --options; --regex may repeat.
 function parseArgs (args) {
@@ -209,7 +235,7 @@ function parseArgs (args) {
 }
 
 const clusterLine = c => [c.id, c.size, c.created, c.name].join ("\t");
-const csvCell = s => /[",\r\n]/.test (s) ? `"${s.replace (/"/g, '""')}"` : s;
+const printNote = res => { if (res.query_note) console.error (`note: ${res.query_note}`); };
 
 async function main ([cmd, ...rest]) {
   const { pos, opt } = parseArgs (rest);
@@ -219,8 +245,9 @@ async function main ([cmd, ...rest]) {
     console.log (JSON.stringify (await pw.account (), null, 2));
   } else if (cmd === "search" && query) {
     const page = await pw.search (query, { perPage: Number (perPage) || 20 });
-    console.log (`${page.total} sites match, page ${page.page} of ${page.total_pages}` +
+    console.log (`${page.total_capped ? "more than " : ""}${page.total} sites match, page ${page.page} of ${page.total_pages}` +
                  (page.truncated ? " (cut short by the plan)" : ""));
+    printNote (page);
     for (const r of page.results) console.log ([r.rank ?? "", r.domain, r.url].join ("\t"));
   } else if (cmd === "export" && query) {
     const meta = {};
@@ -235,22 +262,32 @@ async function main ([cmd, ...rest]) {
   } else if (cmd === "cluster-create" && (opt.query || opt["domains-file"])) {
     const domains = opt.query ? undefined
       : readFileSync (opt["domains-file"] === "-" ? 0 : opt["domains-file"], "utf8").split (/\r?\n/).map (s => s.trim ()).filter (Boolean);
-    console.log (clusterLine (await pw.createCluster ({ query: opt.query, domains, name: opt.name })));
+    const c = await pw.createCluster ({ query: opt.query, domains, name: opt.name, limit: Number (opt.limit) || undefined });
+    console.log (clusterLine (c));
+    printNote (c);
   } else if (cmd === "cluster-combine" && pos.length >= 3) {
     console.log (clusterLine (await pw.combineClusters (pos[0], pos.slice (1), { name: opt.name })));
   } else if (cmd === "presets") {
     for (const p of (await pw.clusterPresets ()).presets) console.log (`${p.name}\t${p.about}`);
   } else if (cmd === "extract" && pos[0]) {
     const presets = (opt.presets || "").split (",").map (s => s.trim ()).filter (Boolean);
-    const meta = {};
-    let n = 0;
-    const offset = Number (opt.offset) || 0;
-    if (!offset) process.stdout.write (["domain", ...presets, ...opt.regex].map (csvCell).join (",") + "\n");
-    for await (const r of pw.iterExtract (pos[0], { presets, regex: opt.regex, offset, meta })) {
-      process.stdout.write ([r.domain, ...r.values.map (v => v.join ("\n"))].map (csvCell).join (",") + "\n");
-      n ++;
+    let offset = Number (opt.offset) || 0, part;
+    while (offset !== null) {
+      part = await pw.extractCsv (pos[0], { presets, regex: opt.regex, offset, delimiter: opt.delimiter, header: offset === 0 });
+      process.stdout.write (part.csv);
+      offset = part.next_offset;
+      if (offset !== null && part.points_left <= 0) {
+        console.error (`the day's extraction points ran out; resume with --offset ${offset}`);
+        process.exitCode = 1;
+        return;
+      }
     }
-    console.error (`${n} sites with matches, ${meta.points_left} extraction points left`);
+    console.error (`${part.points_left} extraction points left`);
+  } else if (cmd === "signatures" && pos[0]) {
+    const res = await pw.signatures (pos[0]);
+    for (const s of res.signatures)
+      console.log ([s.query, s.in_cluster, s.websites ?? `<${s.websites_max}`, s.technology ?? ""].join ("\t"));
+    if (res.note) console.error (`note: ${res.note}`);
   } else if (cmd === "cluster-rename" && pos.length >= 2) {
     console.log (clusterLine (await pw.renameCluster (pos[0], pos[1])));
   } else if (cmd === "cluster-delete" && pos[0]) {

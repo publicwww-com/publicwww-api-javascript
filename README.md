@@ -50,7 +50,10 @@ pull values out of their page source or to combine with other clusters. See
 
 ```sh
 node publicwww.mjs cluster-create --query '"googletagmanager.com/gtm.js"'   # prints id, size, created, name
+node publicwww.mjs cluster-create --query 'like:"online course" site:de' --limit 100   # sites about a topic; like: removes nothing, so pass --limit
 node publicwww.mjs extract 12 --presets email,phone > contacts.csv          # the whole cluster, part after part
+node publicwww.mjs extract 12 --presets email --delimiter ';' > emails.csv
+node publicwww.mjs signatures 12    # code the sites share, as searches for more like them
 node publicwww.mjs extract 12 --regex '/data-site-id="([0-9]+)"/i' > ids.csv
 node publicwww.mjs cluster-combine diff 14 12 --name "new this month"       # also: and, or
 node publicwww.mjs clusters      # and: cluster ID, presets, cluster-rename ID NAME, cluster-delete ID
@@ -59,6 +62,7 @@ node publicwww.mjs clusters      # and: cluster ID, presets, cluster-rename ID N
 ```js
 const gtm = await pw.createCluster ({ query: '"googletagmanager.com/gtm.js"' });   // costs one search
 const mine = await pw.createCluster ({ domains: ["example.com", "https://example.org/"], name: "mine" });
+const topic = await pw.createCluster ({ query: 'like:"online course" site:de', limit: 100 });   // the first 100 by similarity
 
 // Every site, in parts of up to 1000 (following next_offset); spends extraction points.
 for await (const row of pw.iterExtract (gtm.id, { presets: ["email", "phone"] })) {
