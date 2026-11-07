@@ -1,7 +1,7 @@
 {
   "name": "publicwww-api",
   "version": "1.2.0",
-  "description": "A small client for the PublicWWW API: search the source code of hundreds of millions of websites.",
+  "description": "A small client for the PublicWWW API: search the source code of web pages.",
   "type": "module",
   "main": "publicwww.mjs",
   "bin": { "publicwww": "publicwww.mjs" },
